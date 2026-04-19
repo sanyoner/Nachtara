@@ -3494,6 +3494,18 @@ function Library:ShowLoader(Config)
     local LoaderWidth = HasPatchnotes and 560 or 320;
     local PanelW = HasPatchnotes and 280 or 316;
 
+    -- Dedicated ScreenGui for the loader + intro with IgnoreGuiInset=true so
+    -- the content isn't cut off by the Roblox topbar (health, chat, etc.).
+    -- Parented directly to CoreGui via ProtectGui, destroyed after callback.
+    local LoaderScreenGui = Instance.new('ScreenGui');
+    ProtectGui(LoaderScreenGui);
+    LoaderScreenGui.Name = 'NachtaraLoader';
+    LoaderScreenGui.IgnoreGuiInset = true;
+    LoaderScreenGui.ResetOnSpawn = false;
+    LoaderScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global;
+    LoaderScreenGui.DisplayOrder = 9999;
+    LoaderScreenGui.Parent = CoreGui;
+
     local LoaderGui = Library:Create('Frame', {
         AnchorPoint = Vector2.new(0.5, 0.5);
         BackgroundColor3 = Color3.new(0, 0, 0);
@@ -3501,7 +3513,7 @@ function Library:ShowLoader(Config)
         Position = UDim2.fromScale(0.5, 0.5);
         Size = UDim2.fromOffset(LoaderWidth, 220);
         ZIndex = 500;
-        Parent = ScreenGui;
+        Parent = LoaderScreenGui;
     });
 
     -- Glow
@@ -3945,7 +3957,7 @@ function Library:ShowLoader(Config)
             BorderSizePixel = 0;
             Size = UDim2.fromScale(1, 1);
             ZIndex = 480;
-            Parent = ScreenGui;
+            Parent = LoaderScreenGui;
         });
 
         local Blur;
@@ -4011,6 +4023,8 @@ function Library:ShowLoader(Config)
         task.delay(1.1, function()
             pcall(Tint.Destroy, Tint);
             if Blur then pcall(Blur.Destroy, Blur); end;
+            -- Tear down the dedicated loader ScreenGui once everything inside has finished.
+            pcall(LoaderScreenGui.Destroy, LoaderScreenGui);
         end);
 
         -- Overlap intro fade-out with UI creation so the window fades in behind the dimming intro.
@@ -4368,8 +4382,8 @@ function Library:CreateWindow(...)
         local TabUnderline = Library:Create('Frame', {
             BackgroundColor3 = Library.AccentColor;
             BorderSizePixel = 0;
-            Position = UDim2.new(0, 0, 1, -2);
-            Size = UDim2.new(1, 0, 0, 2);
+            Position = UDim2.new(0, 0, 1, -1);
+            Size = UDim2.new(1, 0, 0, 1);
             ZIndex = 8;
             Visible = false;
             Parent = TabButton;
