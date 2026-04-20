@@ -493,33 +493,58 @@ function Library:MakeDraggable(Frame, Cutoff)
     local entry = { frame = Frame };
     table.insert(Library.Draggables, entry);
 
-    -- AABB collision snap against every other registered, visible draggable.
-    local function resolveCollision(x, y)
+    -- AABB block against every other visible draggable.
+    -- The previous version picked the "smallest push" axis, which flips the
+    -- window to the opposite side of an obstacle once the cursor crosses the
+    -- center — felt buggy to the user. This version instead blocks on a
+    -- per-axis basis: we accept the movement on an axis only if, moving from
+    -- the current Frame position to the target on just that axis, the Frame
+    -- still stays out of the other window's rect. You can slide along an
+    -- edge but you can't push into a window.
+    local function resolveCollision(newX, newY)
         local size = Frame.AbsoluteSize;
         local w, h = size.X, size.Y;
+        local curPos = Frame.AbsolutePosition;
+        local curX, curY = curPos.X, curPos.Y;
+
+        local function overlaps(x, y, oPos, oSize)
+            return x < oPos.X + oSize.X and x + w > oPos.X
+                and y < oPos.Y + oSize.Y and y + h > oPos.Y;
+        end;
+
+        local x, y = newX, newY;
+
         for _, other in ipairs(Library.Draggables) do
             if other ~= entry and other.frame and other.frame.Parent and other.frame.Visible then
                 local oPos = other.frame.AbsolutePosition;
                 local oSize = other.frame.AbsoluteSize;
-                if x < oPos.X + oSize.X and x + w > oPos.X
-                    and y < oPos.Y + oSize.Y and y + h > oPos.Y then
-                    -- Overlap. Pick the axis with the smallest required push.
-                    local pushL = oPos.X - w - x;           -- push us left
-                    local pushR = oPos.X + oSize.X - x;     -- push us right
-                    local pushU = oPos.Y - h - y;           -- push us up
-                    local pushD = oPos.Y + oSize.Y - y;     -- push us down
-                    local aL, aR = math.abs(pushL), math.abs(pushR);
-                    local aU, aD = math.abs(pushU), math.abs(pushD);
-                    local minX = math.min(aL, aR);
-                    local minY = math.min(aU, aD);
-                    if minX < minY then
-                        x = x + (aL < aR and pushL or pushR);
+
+                -- Try X move (keep current Y). If that overlaps, clamp X to
+                -- the near edge of the obstacle — whichever side we started
+                -- on decides whether we stop at obstacle's left or right edge.
+                if overlaps(x, curY, oPos, oSize) then
+                    if curX + w <= oPos.X then
+                        x = oPos.X - w;
+                    elseif curX >= oPos.X + oSize.X then
+                        x = oPos.X + oSize.X;
                     else
-                        y = y + (aU < aD and pushU or pushD);
+                        x = curX; -- already overlapping horizontally: no-op on X
+                    end;
+                end;
+
+                -- Try Y move with the possibly-clamped X.
+                if overlaps(x, y, oPos, oSize) then
+                    if curY + h <= oPos.Y then
+                        y = oPos.Y - h;
+                    elseif curY >= oPos.Y + oSize.Y then
+                        y = oPos.Y + oSize.Y;
+                    else
+                        y = curY;
                     end;
                 end;
             end;
         end;
+
         return x, y;
     end;
 
@@ -1945,7 +1970,6 @@ do
                 { BorderColor3 = 'Black' }
             );
 
-            Library:AddScalePop(Outer);
             Library:AddRipple(Inner, Library.AccentColor);
 
             return Outer, Inner, Label
@@ -2407,10 +2431,6 @@ do
             }):Play();
         end;
 
-        -- Scale-pop on hover over the clickable region. Cheap UIScale tween
-        -- on the 10×10 ToggleOuter — no layout side effects.
-        Library:AddScalePop(ToggleOuter, 1.15);
-
         function Toggle:OnChanged(Func)
             Toggle.Changed = Func;
             Func(Toggle.Value);
@@ -2570,8 +2590,6 @@ do
             { BorderColor3 = 'AccentColor' },
             { BorderColor3 = 'Black' }
         );
-
-        Library:AddScalePop(SliderOuter, 1.02);
 
         -- Shimmer rides in its own overlay frame because Fill already owns a
         -- UIGradient (left-to-right fade) and Roblox only renders one UIGradient
@@ -2798,8 +2816,6 @@ do
             { BorderColor3 = 'AccentColor' },
             { BorderColor3 = 'Black' }
         );
-
-        Library:AddScalePop(DropdownOuter, 1.02);
 
         if type(Info.Tooltip) == 'string' then
             Library:AddToolTip(Info.Tooltip, DropdownOuter)
@@ -4491,22 +4507,21 @@ function Library:CreateWindow(...)
         Tabs = {};
     };
 
-    -- CanvasGroup (instead of plain Frame): flattens all children into a single
-    -- render surface so fading the entire menu = one `GroupTransparency` tween
-    -- instead of creating 1000+ per-descendant tweens. Before this, every
-    -- open/close spiked the frame because TweenService had to allocate a Tween
-    -- instance per descendant (Frames, Labels, Strokes, Gradients — easily
-    -- 1500+ on a full menu). Also makes dragging cheaper because Roblox
-    -- batches children's absolute-position recompute through the canvas.
-    local Outer = Library:Create('CanvasGroup', {
+    -- Outer is a plain Frame so the 6 glow layers (positioned at -i,-i with
+    -- size 1+2i x 1+2i) render outside its bounds. A CanvasGroup clips to its
+    -- own size — using one here swallowed the glow entirely.
+    --
+    -- The fadeable content lives inside FadeGroup (CanvasGroup) below: that
+    -- gives us the single-tween GroupTransparency fade path. The glow frames
+    -- sit alongside the FadeGroup, so they render, but they don't participate
+    -- in the fade — close is instant anyway, so that's fine.
+    local Outer = Library:Create('Frame', {
         AnchorPoint = Config.AnchorPoint,
-        BackgroundColor3 = Color3.new(0, 0, 0);
+        BackgroundTransparency = 1;
         BorderSizePixel = 0;
         Position = Config.Position,
         Size = Config.Size,
         Visible = false;
-        ClipsDescendants = false; -- glow layers sit outside the frame
-        GroupTransparency = 1;    -- start invisible; first Toggle fades in
         ZIndex = 1;
         Parent = ScreenGui;
     });
@@ -4530,6 +4545,19 @@ function Library:CreateWindow(...)
         });
     end;
 
+    -- Fade layer — holds the actual menu content. Single tween on
+    -- GroupTransparency fades ~1500 descendants atomically instead of
+    -- allocating a Tween per descendant.
+    local FadeGroup = Library:Create('CanvasGroup', {
+        BackgroundColor3 = Color3.new(0, 0, 0);
+        BorderSizePixel = 0;
+        Position = UDim2.new(0, 0, 0, 0);
+        Size = UDim2.new(1, 0, 1, 0);
+        GroupTransparency = 1;
+        ZIndex = 1;
+        Parent = Outer;
+    });
+
     -- 3-layer border: Black > Dark gray > Black > Background
     local Border1 = Library:Create('Frame', {
         BackgroundColor3 = Library.OutlineColor;
@@ -4537,7 +4565,7 @@ function Library:CreateWindow(...)
         Position = UDim2.new(0, 1, 0, 1);
         Size = UDim2.new(1, -2, 1, -2);
         ZIndex = 1;
-        Parent = Outer;
+        Parent = FadeGroup;
     });
 
     Library:AddToRegistry(Border1, {
@@ -4568,11 +4596,6 @@ function Library:CreateWindow(...)
 
     -- Overall menu body gradient: subtle top→bottom darken for depth.
     Library:ApplyGradient(Inner, 0.15);
-
-    -- Depth layers: thin inset shadow against the Inner background so groupboxes
-    -- appear to float above a slightly recessed surface. Pairs with the per-
-    -- groupbox AddInnerShadow to produce the Atlanta-style stacked depth look.
-    Library:AddInnerShadow(Inner, 0.35);
 
     -- Animated accent gradient line at the very top
     local TopAccent = Library:Create('Frame', {
@@ -5010,10 +5033,6 @@ function Library:CreateWindow(...)
 
             Library:ApplyGradient(BoxInner, 0.2);
 
-            -- Inset shadow around groupbox edges — depth cue that separates the
-            -- box from the background without another hard border.
-            Library:AddInnerShadow(BoxInner, 0.55);
-
             -- Accent line at top of groupbox with double-sided fade
             local BoxAccent = Library:Create('Frame', {
                 BackgroundColor3 = Library.AccentColor;
@@ -5424,12 +5443,16 @@ function Library:CreateWindow(...)
         Library.Toggled = Toggled;
         ModalElement.Modal = Toggled;
 
-        -- Blur tween — syncs with the frame fade. Size 12 when open, 0 when closed.
+        -- Blur: fade in with the menu, drop instantly on close.
         local Blur = ensureMenuBlur();
         if Blur and Blur.Parent then
-            TweenService:Create(Blur, TweenInfo.new(FadeTime, Enum.EasingStyle.Quad), {
-                Size = Toggled and 12 or 0;
-            }):Play();
+            if Toggled then
+                TweenService:Create(Blur, TweenInfo.new(FadeTime, Enum.EasingStyle.Quad), {
+                    Size = 12;
+                }):Play();
+            else
+                Blur.Size = 0;
+            end;
         end;
 
         -- Refresh PlaceholderBoxes: empty ones show while menu is open (so the
@@ -5542,19 +5565,19 @@ function Library:CreateWindow(...)
             end);
         end;
 
-        -- Single tween on the CanvasGroup's GroupTransparency fades the
-        -- entire menu atomically. Replaces the old per-descendant tween
-        -- loop which allocated 1000+ Tween instances per toggle and spiked
-        -- the frame.
-        TweenService:Create(
-            Outer,
-            TweenInfo.new(FadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            { GroupTransparency = Toggled and 0 or 1 }
-        ):Play();
-
-        task.wait(FadeTime);
-
-        Outer.Visible = Toggled;
+        if Toggled then
+            -- Open: fade in on the CanvasGroup that holds the menu content.
+            TweenService:Create(
+                FadeGroup,
+                TweenInfo.new(FadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { GroupTransparency = 0 }
+            ):Play();
+            task.wait(FadeTime);
+        else
+            -- Close: instant. User explicitly wanted no close fade.
+            FadeGroup.GroupTransparency = 1;
+            Outer.Visible = false;
+        end;
 
         Fading = false;
     end
