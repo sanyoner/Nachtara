@@ -13,13 +13,13 @@
 -- pure Lua without a real crypto lib. Matches the user's request: "crypted"
 -- meaning "doesn't reveal contents on casual inspection".
 --
--- Public API (same as stock SaveManager):
+-- Public API:
 --   SaveManager:SetLibrary(lib)
 --   SaveManager:SetFolder(name)
 --   SaveManager:SetIgnoreIndexes(list) / :IgnoreThemeSettings()
+--   SaveManager:AddPreSaveHook(fn) / :AddPostLoadHook(fn)
 --   SaveManager:Save(name) / :Load(name)
 --   SaveManager:BuildConfigSection(tab)
---   SaveManager:LoadAutoloadConfig()
 -- ═══════════════════════════════════════════════════════════════════════
 
 local httpService = game:GetService('HttpService')
@@ -202,7 +202,20 @@ function SaveManager:Save(name)
     local okCipher, payload = pcall(encryptPayload, json)
     if not okCipher then return false, 'failed to encrypt data' end
 
-    writefile(fullPath, payload)
+    -- Wrap writefile so executor-level failures (invalid chars in name,
+    -- permission issues, locked file) surface as a notify instead of
+    -- propagating out of the button handler and silently discarding the
+    -- save. Previous version called writefile bare; Overwrite "not
+    -- working" was this path failing invisibly on some executors.
+    local okWrite, writeErr = pcall(writefile, fullPath, payload)
+    if not okWrite then return false, 'writefile failed: ' .. tostring(writeErr) end
+
+    -- If a legacy plain-JSON copy exists alongside the new encrypted one,
+    -- drop it so Load doesn't keep falling back to the old unencrypted
+    -- content after an overwrite.
+    local legacyPath = self.Folder .. '/settings/' .. name .. '.json'
+    if isfile(legacyPath) then pcall(delfile, legacyPath) end
+
     return true
 end
 
@@ -273,18 +286,6 @@ function SaveManager:RefreshConfigList()
     return out
 end
 
-function SaveManager:LoadAutoloadConfig()
-    local path = self.Folder .. '/settings/autoload.txt'
-    if not isfile(path) then return end
-
-    local name = readfile(path)
-    local ok, err = self:Load(name)
-    if not ok then
-        return self.Library:Notify('Failed to load autoload config: ' .. tostring(err))
-    end
-    self.Library:Notify(string.format('Auto loaded config %q', name))
-end
-
 function SaveManager:BuildConfigSection(tab)
     assert(self.Library, 'Must set SaveManager.Library')
 
@@ -314,6 +315,9 @@ function SaveManager:BuildConfigSection(tab)
 
     section:AddButton('Overwrite config', function()
         local name = Options.SaveManager_ConfigList.Value
+        if not name or name == '' then
+            return self.Library:Notify('Select a config in the dropdown first', 2)
+        end
         local ok, err = self:Save(name)
         if not ok then return self.Library:Notify('Failed to overwrite config: ' .. tostring(err)) end
         self.Library:Notify(string.format('Overwrote config %q', name))
@@ -323,20 +327,6 @@ function SaveManager:BuildConfigSection(tab)
         Options.SaveManager_ConfigList:SetValues(self:RefreshConfigList())
         Options.SaveManager_ConfigList:SetValue(nil)
     end)
-
-    section:AddButton('Set as autoload', function()
-        local name = Options.SaveManager_ConfigList.Value
-        writefile(self.Folder .. '/settings/autoload.txt', name)
-        SaveManager.AutoloadLabel:SetText('Current autoload config: ' .. name)
-        self.Library:Notify(string.format('Set %q to auto load', name))
-    end)
-
-    SaveManager.AutoloadLabel = section:AddLabel('Current autoload config: none', true)
-
-    if isfile(self.Folder .. '/settings/autoload.txt') then
-        local name = readfile(self.Folder .. '/settings/autoload.txt')
-        SaveManager.AutoloadLabel:SetText('Current autoload config: ' .. name)
-    end
 
     SaveManager:SetIgnoreIndexes({ 'SaveManager_ConfigList', 'SaveManager_ConfigName' })
 end
