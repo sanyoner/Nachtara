@@ -557,15 +557,18 @@ function Library:MakeDraggable(Frame, Cutoff)
         local relY = Input.Position.Y - Frame.AbsolutePosition.Y;
         if relY > (Cutoff or 40) then return end;
 
-        if Frame.AnchorPoint ~= Vector2.new(0, 0) then
-            local absPos = Frame.AbsolutePosition;
-            Frame.AnchorPoint = Vector2.new(0, 0);
-            Frame.Position = UDim2.fromOffset(absPos.X, absPos.Y);
-        end;
+        -- Normalize to pure-offset position in absolute screen space so that
+        -- pendingX / pendingY match the coordinate system resolveCollision
+        -- operates in (AbsolutePosition). Without this, frames with scale=1
+        -- anchoring (e.g. right-edge anchored addons like ESPPreview) fed
+        -- mixed scale+offset values into resolveCollision and the AABB test
+        -- saw bogus coordinates — collisions silently never triggered.
+        local absPos = Frame.AbsolutePosition;
+        Frame.AnchorPoint = Vector2.new(0, 0);
+        Frame.Position = UDim2.fromOffset(absPos.X, absPos.Y);
 
         local dragStart = Input.Position;
-        local startPos  = Frame.Position;
-        local pendingX, pendingY = startPos.X.Offset, startPos.Y.Offset;
+        local pendingX, pendingY = absPos.X, absPos.Y;
         local dirty = false;
 
         local moveConn, renderConn, endConn;
@@ -577,8 +580,8 @@ function Library:MakeDraggable(Frame, Cutoff)
             end;
             -- Stash the target; the per-frame handler writes Position.
             local delta = moveInput.Position - dragStart;
-            pendingX = startPos.X.Offset + delta.X;
-            pendingY = startPos.Y.Offset + delta.Y;
+            pendingX = absPos.X + delta.X;
+            pendingY = absPos.Y + delta.Y;
             dirty = true;
         end);
 
@@ -586,7 +589,7 @@ function Library:MakeDraggable(Frame, Cutoff)
             if not dirty then return end;
             dirty = false;
             local x, y = resolveCollision(pendingX, pendingY);
-            Frame.Position = UDim2.new(startPos.X.Scale, x, startPos.Y.Scale, y);
+            Frame.Position = UDim2.fromOffset(x, y);
         end);
 
         endConn = Input.Changed:Connect(function()
@@ -2590,19 +2593,6 @@ do
             { BorderColor3 = 'AccentColor' },
             { BorderColor3 = 'Black' }
         );
-
-        -- Shimmer rides in its own overlay frame because Fill already owns a
-        -- UIGradient (left-to-right fade) and Roblox only renders one UIGradient
-        -- per instance.
-        local ShimmerOverlay = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(1, 1, 1);
-            BackgroundTransparency = 0.85;
-            BorderSizePixel = 0;
-            Size = UDim2.new(1, 0, 1, 0);
-            ZIndex = Fill.ZIndex + 1;
-            Parent = Fill;
-        });
-        Library:AddShimmer(ShimmerOverlay, 2.4);
 
         if type(Info.Tooltip) == 'string' then
             Library:AddToolTip(Info.Tooltip, SliderOuter)
@@ -4612,8 +4602,11 @@ function Library:CreateWindow(...)
     });
 
     -- Shimmer gradient on accent line (unique visual)
-    local ShimmerOffset = 0;
-    local AccentGradient = Library:Create('UIGradient', {
+    -- Static double-sided fade on the accent line (was animated — removed
+    -- because any per-frame UIGradient.Offset write inside the FadeGroup
+    -- CanvasGroup forces the whole menu canvas to re-rasterize that frame,
+    -- which caused constant drag/resize lag).
+    Library:Create('UIGradient', {
         Transparency = NumberSequence.new({
             NumberSequenceKeypoint.new(0, 0.25),
             NumberSequenceKeypoint.new(0.4, 0),
@@ -4622,13 +4615,6 @@ function Library:CreateWindow(...)
         });
         Parent = TopAccent;
     });
-
-    -- Animate the shimmer (smooth ping-pong)
-    table.insert(Library.Signals, RunService.RenderStepped:Connect(function(dt)
-        ShimmerOffset = ShimmerOffset + dt * 0.15;
-        local t = math.sin(ShimmerOffset) * 0.4;
-        AccentGradient.Offset = Vector2.new(t, 0);
-    end));
 
     -- Title bar area (GS-style: title centered, no tabs here)
     local TitleBar = Library:Create('Frame', {
