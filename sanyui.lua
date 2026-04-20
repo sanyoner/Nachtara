@@ -172,6 +172,134 @@ function Library:ApplyGradient(Inst, strength)
 end;
 
 -- ═══════════════════════════════════════════════════════════════════
+-- UI Polish Helpers (scale-pop, ripple, shimmer, inner shadow, etc.)
+--
+-- Each helper adds a small visual effect to an existing Frame without
+-- changing its layout. Kept together so the call sites below stay lean.
+-- ═══════════════════════════════════════════════════════════════════
+
+-- Scale-pop: tween a UIScale child on MouseEnter/Leave. Gives a subtle "bump"
+-- when hovering interactive elements (buttons, toggles, sliders, dropdowns).
+function Library:AddScalePop(Frame, hoverScale, duration)
+    local scale = Frame:FindFirstChildOfClass('UIScale')
+        or Library:Create('UIScale', { Scale = 1, Parent = Frame });
+    local target = hoverScale or 1.03;
+    local info = TweenInfo.new(duration or 0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+    Frame.MouseEnter:Connect(function()
+        TweenService:Create(scale, info, { Scale = target }):Play();
+    end);
+    Frame.MouseLeave:Connect(function()
+        TweenService:Create(scale, info, { Scale = 1 }):Play();
+    end);
+    return scale;
+end;
+
+-- Ripple: on MouseButton1 click, spawn a circular Frame at the click point
+-- that expands + fades out. Attaches to a clickable Frame and uses its
+-- AbsolutePosition to convert the mouse location into frame-local pixels.
+function Library:AddRipple(Frame, rippleColor)
+    Frame.ClipsDescendants = true;
+    local color = rippleColor or Color3.new(1, 1, 1);
+    Frame.InputBegan:Connect(function(Input)
+        if Input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and Input.UserInputType ~= Enum.UserInputType.Touch then return end;
+        local relX = Input.Position.X - Frame.AbsolutePosition.X;
+        local relY = Input.Position.Y - Frame.AbsolutePosition.Y;
+
+        local ripple = Instance.new('Frame');
+        ripple.BackgroundColor3 = color;
+        ripple.BackgroundTransparency = 0.7;
+        ripple.BorderSizePixel = 0;
+        ripple.AnchorPoint = Vector2.new(0.5, 0.5);
+        ripple.Position = UDim2.fromOffset(relX, relY);
+        ripple.Size = UDim2.fromOffset(0, 0);
+        ripple.ZIndex = Frame.ZIndex + 1;
+        ripple.Parent = Frame;
+        Instance.new('UICorner', ripple).CornerRadius = UDim.new(1, 0);
+
+        -- Expand to cover the frame, fade to transparent.
+        local maxDim = math.max(Frame.AbsoluteSize.X, Frame.AbsoluteSize.Y) * 2.2;
+        local info = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+        TweenService:Create(ripple, info, {
+            Size = UDim2.fromOffset(maxDim, maxDim),
+            BackgroundTransparency = 1,
+        }):Play();
+        task.delay(0.5, function()
+            pcall(ripple.Destroy, ripple);
+        end);
+    end);
+end;
+
+-- Inner shadow: 4 thin gradient bars along the edges of a Frame. Each bar is
+-- colored black with a UIGradient that fades from the edge inward, giving
+-- the frame a subtle "inset" depth.
+function Library:AddInnerShadow(Frame, strength)
+    local t = strength or 0.6;
+    local z = (Frame.ZIndex or 1) + 1;
+    local function mk(pos, size, rot)
+        local f = Library:Create('Frame', {
+            BackgroundColor3 = Color3.new(0, 0, 0);
+            BorderSizePixel = 0;
+            Position = pos;
+            Size = size;
+            ZIndex = z;
+            Parent = Frame;
+        });
+        Library:Create('UIGradient', {
+            Rotation = rot;
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, t),
+                NumberSequenceKeypoint.new(1, 1),
+            });
+            Parent = f;
+        });
+        return f;
+    end;
+    mk(UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 6), 90);     -- top: fade down
+    mk(UDim2.new(0, 0, 1, -6), UDim2.new(1, 0, 0, 6), -90);   -- bottom: fade up
+    mk(UDim2.new(0, 0, 0, 0), UDim2.new(0, 6, 1, 0), 0);      -- left: fade right
+    mk(UDim2.new(1, -6, 0, 0), UDim2.new(0, 6, 1, 0), 180);   -- right: fade left
+end;
+
+-- Double-sided fade gradient — used for divider lines, accent underlines, etc.
+function Library:ApplyDoubleFade(Inst, rotation)
+    return Library:Create('UIGradient', {
+        Rotation = rotation or 0;
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.2, 0.4),
+            NumberSequenceKeypoint.new(0.5, 0),
+            NumberSequenceKeypoint.new(0.8, 0.4),
+            NumberSequenceKeypoint.new(1, 1),
+        });
+        Parent = Inst;
+    });
+end;
+
+-- Shimmer: animated UIGradient that loops across a Frame. Used on slider
+-- fills for the "progress bar shimmer" effect. Returns the gradient so the
+-- caller can Disconnect or modify if needed.
+function Library:AddShimmer(Frame, period)
+    local grad = Library:Create('UIGradient', {
+        Rotation = 20;
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.45, 1),
+            NumberSequenceKeypoint.new(0.5, 0.65),
+            NumberSequenceKeypoint.new(0.55, 1),
+            NumberSequenceKeypoint.new(1, 1),
+        });
+        Parent = Frame;
+    });
+    local p = period or 2.2;
+    table.insert(Library.Signals, RenderStepped:Connect(function()
+        local t = (tick() % p) / p;
+        grad.Offset = Vector2.new(t * 2 - 1, 0); -- sweep across the frame
+    end));
+    return grad;
+end;
+
+-- ═══════════════════════════════════════════════════════════════════
 -- Custom Font System
 --
 -- Download TTF files from a remote URL, cache them on disk, register them
@@ -451,6 +579,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
     local Tooltip = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor,
         BorderColor3 = Library.OutlineColor,
+        BackgroundTransparency = 1,
 
         Size = UDim2.fromOffset(X + 5, Y + 4),
         ZIndex = 100,
@@ -465,6 +594,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
         TextSize = 14;
         Text = InfoStr,
         TextColor3 = Library.FontColor,
+        TextTransparency = 1,
         TextXAlignment = Enum.TextXAlignment.Left;
         ZIndex = Tooltip.ZIndex + 1,
 
@@ -480,7 +610,9 @@ function Library:AddToolTip(InfoStr, HoverInstance)
         TextColor3 = 'FontColor',
     });
 
-    local IsHovering = false
+    local IsHovering = false;
+    local showToken = 0;
+    local fadeInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
 
     HoverInstance.MouseEnter:Connect(function()
         if Library:MouseIsOverOpenedFrame() then
@@ -488,19 +620,41 @@ function Library:AddToolTip(InfoStr, HoverInstance)
         end
 
         IsHovering = true
+        showToken = showToken + 1
+        local myToken = showToken
 
-        Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
-        Tooltip.Visible = true
+        -- 300 ms delay so tooltips don't flash while the cursor is just passing through.
+        task.delay(0.3, function()
+            if not IsHovering or myToken ~= showToken then return end
 
-        while IsHovering do
-            RunService.Heartbeat:Wait()
             Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
-        end
+            Tooltip.BackgroundTransparency = 1
+            Label.TextTransparency = 1
+            Tooltip.Visible = true
+
+            TweenService:Create(Tooltip, fadeInfo, { BackgroundTransparency = 0 }):Play()
+            TweenService:Create(Label, fadeInfo, { TextTransparency = 0 }):Play()
+
+            while IsHovering and myToken == showToken do
+                RunService.Heartbeat:Wait()
+                Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
+            end
+        end)
     end)
 
     HoverInstance.MouseLeave:Connect(function()
         IsHovering = false
-        Tooltip.Visible = false
+        showToken = showToken + 1
+        local myToken = showToken
+
+        local fadeOut = TweenService:Create(Tooltip, fadeInfo, { BackgroundTransparency = 1 })
+        TweenService:Create(Label, fadeInfo, { TextTransparency = 1 }):Play()
+        fadeOut:Play()
+        fadeOut.Completed:Connect(function()
+            if myToken == showToken then
+                Tooltip.Visible = false
+            end
+        end)
     end)
 end
 
@@ -1332,26 +1486,38 @@ do
             Info.Mode = 'Toggle'
         end
 
+        -- Pill-style keybind badge: rounded corners + subtle accent tint on the outer ring.
         local PickOuter = Library:Create('Frame', {
             BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
-            Size = UDim2.new(0, 28, 0, 15);
+            BorderSizePixel = 0;
+            Size = UDim2.new(0, 30, 0, 16);
             ZIndex = 6;
             Parent = ToggleLabel;
+        });
+
+        Library:Create('UICorner', {
+            CornerRadius = UDim.new(0, 4);
+            Parent = PickOuter;
         });
 
         local PickInner = Library:Create('Frame', {
             BackgroundColor3 = Library.BackgroundColor;
             BorderColor3 = Library.OutlineColor;
             BorderMode = Enum.BorderMode.Inset;
-            Size = UDim2.new(1, 0, 1, 0);
+            BorderSizePixel = 0;
+            Size = UDim2.new(1, -2, 1, -2);
+            Position = UDim2.fromOffset(1, 1);
             ZIndex = 7;
             Parent = PickOuter;
         });
 
+        Library:Create('UICorner', {
+            CornerRadius = UDim.new(0, 3);
+            Parent = PickInner;
+        });
+
         Library:AddToRegistry(PickInner, {
             BackgroundColor3 = 'BackgroundColor';
-            BorderColor3 = 'OutlineColor';
         });
 
         local DisplayLabel = Library:CreateLabel({
@@ -1779,6 +1945,9 @@ do
                 { BorderColor3 = 'Black' }
             );
 
+            Library:AddScalePop(Outer);
+            Library:AddRipple(Inner, Library.AccentColor);
+
             return Outer, Inner, Label
         end
 
@@ -1917,6 +2086,9 @@ do
         Library:AddToRegistry(DividerOuter, {
             BackgroundColor3 = 'OutlineColor';
         });
+
+        -- Symmetric fade — divider edges melt into the groupbox instead of cutting hard.
+        Library:ApplyDoubleFade(DividerOuter, 90);
 
         Groupbox:AddBlank(4);
         Groupbox:Resize();
@@ -2149,6 +2321,8 @@ do
             BackgroundColor3 = Library.AccentColor;
             BorderSizePixel = 0;
             BackgroundTransparency = Toggle.Value and 0 or 1;
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            Position = UDim2.new(0.5, 0, 0.5, 0);
             Size = UDim2.new(1, 0, 1, 0);
             ZIndex = 7;
             Parent = ToggleInner;
@@ -2161,6 +2335,14 @@ do
                 NumberSequenceKeypoint.new(0, 0),
                 NumberSequenceKeypoint.new(1, 0.3),
             });
+            Parent = ToggleAccent;
+        });
+        -- UIScale child driven by Toggle:Display. Empty toggle = scale 0,
+        -- filled toggle = scale 1 with a tiny overshoot (back-out easing).
+        -- Combined with the transparency tween this gives a "check pops in"
+        -- effect instead of a flat alpha fade.
+        local toggleScale = Library:Create('UIScale', {
+            Scale = Toggle.Value and 1 or 0;
             Parent = ToggleAccent;
         });
 
@@ -2207,6 +2389,9 @@ do
         end
 
         local ToggleFadeInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+        -- Back-out easing on the scale tween gives a tiny overshoot on fill-in,
+        -- so the checkmark "pops" rather than just growing linearly.
+        local ToggleScaleInfo = TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out);
 
         function Toggle:Display()
             -- Keep ToggleInner's base color neutral; the overlay handles the
@@ -2217,7 +2402,14 @@ do
             TweenService:Create(ToggleAccent, ToggleFadeInfo, {
                 BackgroundTransparency = Toggle.Value and 0 or 1;
             }):Play();
+            TweenService:Create(toggleScale, ToggleScaleInfo, {
+                Scale = Toggle.Value and 1 or 0;
+            }):Play();
         end;
+
+        -- Scale-pop on hover over the clickable region. Cheap UIScale tween
+        -- on the 10×10 ToggleOuter — no layout side effects.
+        Library:AddScalePop(ToggleOuter, 1.15);
 
         function Toggle:OnChanged(Func)
             Toggle.Changed = Func;
@@ -2378,6 +2570,21 @@ do
             { BorderColor3 = 'AccentColor' },
             { BorderColor3 = 'Black' }
         );
+
+        Library:AddScalePop(SliderOuter, 1.02);
+
+        -- Shimmer rides in its own overlay frame because Fill already owns a
+        -- UIGradient (left-to-right fade) and Roblox only renders one UIGradient
+        -- per instance.
+        local ShimmerOverlay = Library:Create('Frame', {
+            BackgroundColor3 = Color3.new(1, 1, 1);
+            BackgroundTransparency = 0.85;
+            BorderSizePixel = 0;
+            Size = UDim2.new(1, 0, 1, 0);
+            ZIndex = Fill.ZIndex + 1;
+            Parent = Fill;
+        });
+        Library:AddShimmer(ShimmerOverlay, 2.4);
 
         if type(Info.Tooltip) == 'string' then
             Library:AddToolTip(Info.Tooltip, SliderOuter)
@@ -2591,6 +2798,8 @@ do
             { BorderColor3 = 'AccentColor' },
             { BorderColor3 = 'Black' }
         );
+
+        Library:AddScalePop(DropdownOuter, 1.02);
 
         if type(Info.Tooltip) == 'string' then
             Library:AddToolTip(Info.Tooltip, DropdownOuter)
@@ -4360,6 +4569,11 @@ function Library:CreateWindow(...)
     -- Overall menu body gradient: subtle top→bottom darken for depth.
     Library:ApplyGradient(Inner, 0.15);
 
+    -- Depth layers: thin inset shadow against the Inner background so groupboxes
+    -- appear to float above a slightly recessed surface. Pairs with the per-
+    -- groupbox AddInnerShadow to produce the Atlanta-style stacked depth look.
+    Library:AddInnerShadow(Inner, 0.35);
+
     -- Animated accent gradient line at the very top
     local TopAccent = Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
@@ -4795,6 +5009,10 @@ function Library:CreateWindow(...)
             });
 
             Library:ApplyGradient(BoxInner, 0.2);
+
+            -- Inset shadow around groupbox edges — depth cue that separates the
+            -- box from the background without another hard border.
+            Library:AddInnerShadow(BoxInner, 0.55);
 
             -- Accent line at top of groupbox with double-sided fade
             local BoxAccent = Library:Create('Frame', {
@@ -5253,6 +5471,27 @@ function Library:CreateWindow(...)
                 end;
                 local armL, armR, armT, armB = mkArm(), mkArm(), mkArm(), mkArm();
 
+                -- Accent-colored trail: 8 pooled dots that age out into transparency.
+                -- Pool avoids per-frame allocation; write-index rotates round-robin.
+                local TRAIL_N = 8;
+                local trail = table.create(TRAIL_N);
+                for i = 1, TRAIL_N do
+                    local d = Instance.new('Frame');
+                    d.BorderSizePixel = 0;
+                    d.AnchorPoint = Vector2.new(0.5, 0.5);
+                    d.BackgroundColor3 = Library.AccentColor;
+                    d.BackgroundTransparency = 1;
+                    d.Size = UDim2.fromOffset(3, 3);
+                    d.Parent = cursorGui;
+                    local c = Instance.new('UICorner');
+                    c.CornerRadius = UDim.new(1, 0);
+                    c.Parent = d;
+                    trail[i] = { frame = d, birth = -1 };
+                end;
+                local trailIdx = 1;
+                local TRAIL_LIFE = 0.35;
+
+                local lastX, lastY = -1, -1;
                 while Toggled and ScreenGui.Parent do
                     InputService.MouseIconEnabled = false;
                     local mPos = InputService:GetMouseLocation();
@@ -5267,7 +5506,35 @@ function Library:CreateWindow(...)
                     armB.Size     = UDim2.fromOffset(1, S - Gap);
                     armB.Position = UDim2.fromOffset(X, Y + Gap + (S - Gap) / 2);
 
+                    -- Spawn a trail dot only when the cursor actually moved.
+                    if X ~= lastX or Y ~= lastY then
+                        local slot = trail[trailIdx];
+                        slot.frame.Position = UDim2.fromOffset(X, Y);
+                        slot.frame.BackgroundColor3 = Library.AccentColor;
+                        slot.birth = tick();
+                        trailIdx = trailIdx % TRAIL_N + 1;
+                        lastX, lastY = X, Y;
+                    end;
+
+                    local now = tick();
+                    for i = 1, TRAIL_N do
+                        local slot = trail[i];
+                        if slot.birth > 0 then
+                            local age = (now - slot.birth) / TRAIL_LIFE;
+                            if age >= 1 then
+                                slot.frame.BackgroundTransparency = 1;
+                                slot.birth = -1;
+                            else
+                                slot.frame.BackgroundTransparency = age;
+                            end;
+                        end;
+                    end;
+
                     RenderStepped:Wait();
+                end;
+
+                for i = 1, TRAIL_N do
+                    pcall(trail[i].frame.Destroy, trail[i].frame);
                 end;
 
                 InputService.MouseIconEnabled = State;
