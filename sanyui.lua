@@ -171,10 +171,146 @@ function Library:ApplyGradient(Inst, strength)
     });
 end;
 
+-- ═══════════════════════════════════════════════════════════════════
+-- Custom Font System
+--
+-- Download TTF files from a remote URL, cache them on disk, register them
+-- as Font objects, and apply globally to every TextLabel/TextBox in the
+-- menu ScreenGui. Used by :BuildFontSection to surface a font dropdown in
+-- the Settings tab.
+--
+-- Public API:
+--   Library:RegisterFont(name, url)                — download + register one font
+--   Library:RegisterFontsFromRepo(baseUrl, list)   — bulk register (name → baseUrl .. name .. ".ttf")
+--   Library:SetFont(name | nil)                    — apply font to everything (nil = default)
+--   Library:GetActiveFont()                        — returns current Font object (never nil)
+--   Library:BuildFontSection(groupbox)             — adds font dropdown to a groupbox
+--
+-- The default font is Library.Font (an EnumItem). Library.CurrentFont holds
+-- the custom Font object (or nil). CreateLabel uses FontFace so both types
+-- work without a branch.
+-- ═══════════════════════════════════════════════════════════════════
+
+Library.Fonts = {};                                     -- [name] = Font object
+Library.FontFolder = 'LinoriaLibSettings/fonts';        -- on-disk cache path
+Library.DefaultFontFace = Font.fromEnum(Enum.Font.Code);
+Library.CurrentFont = nil;                              -- nil = use DefaultFontFace
+
+do
+    -- Ensure cache folder exists. pcall: some executors lack isfolder.
+    pcall(function()
+        local parts = Library.FontFolder:split('/');
+        local path = '';
+        for i = 1, #parts do
+            path = (i == 1) and parts[i] or (path .. '/' .. parts[i]);
+            if not isfolder(path) then makefolder(path) end;
+        end;
+    end);
+end;
+
+function Library:GetActiveFont()
+    return Library.CurrentFont or Library.DefaultFontFace;
+end;
+
+-- Download one TTF + register it. Writes the TTF + a small JSON family descriptor
+-- to FontFolder so Roblox can resolve the custom Font via getcustomasset. Safe
+-- to call for already-registered names (returns cached).
+function Library:RegisterFont(name, url)
+    if Library.Fonts[name] then return Library.Fonts[name] end;
+    if name == 'Default' or not url then return nil end;
+
+    local ok, fnt = pcall(function()
+        local ttfPath = Library.FontFolder .. '/' .. name .. '.ttf';
+        if not isfile(ttfPath) then
+            writefile(ttfPath, game:HttpGet(url));
+        end;
+        local ttfAsset = getcustomasset(ttfPath);
+        local jsonBody = '{"name":"' .. name .. '","faces":[{"name":"Regular","weight":400,"style":"normal","assetId":"' .. ttfAsset .. '"}]}';
+        local jsonPath = Library.FontFolder .. '/' .. name .. '.json';
+        writefile(jsonPath, jsonBody);
+        return Font.new(getcustomasset(jsonPath), Enum.FontWeight.Regular);
+    end);
+
+    if ok and fnt then
+        Library.Fonts[name] = fnt;
+        return fnt;
+    end;
+    return nil;
+end;
+
+-- Bulk register from a base URL. List is either `{ 'Name1', 'Name2' }` or a
+-- map `{ Name1 = 'url1', Name2 = 'url2' }`. Array form appends ".ttf" to the
+-- base URL; map form uses each value as the full URL.
+function Library:RegisterFontsFromRepo(baseUrl, list)
+    for k, v in pairs(list) do
+        if type(k) == 'number' then
+            Library:RegisterFont(v, baseUrl .. v .. '.ttf');
+        else
+            Library:RegisterFont(k, v);
+        end;
+    end;
+end;
+
+-- Swap active font. Passing nil restores the default. Reapplies to every
+-- text instance under Library.ScreenGui.
+function Library:SetFont(name)
+    local newFont;
+    if not name or name == 'Default' then
+        newFont = nil;
+    else
+        newFont = Library.Fonts[name];
+        if not newFont then return end;
+    end;
+    Library.CurrentFont = newFont;
+    local face = Library:GetActiveFont();
+    if Library.ScreenGui then
+        for _, desc in ipairs(Library.ScreenGui:GetDescendants()) do
+            if desc:IsA('TextLabel') or desc:IsA('TextBox') or desc:IsA('TextButton') then
+                pcall(function() desc.FontFace = face end);
+            end;
+        end;
+    end;
+    -- Notify listeners (e.g. the script's ESP code) so they can re-apply to
+    -- text instances that live outside ScreenGui.
+    if Library.FontListeners then
+        for _, cb in ipairs(Library.FontListeners) do
+            pcall(cb, face, name);
+        end;
+    end;
+end;
+
+Library.FontListeners = {};
+-- External code registers a callback to be notified when the user changes font.
+-- Used by the script to apply the active font to ESP billboards, OOV markers, etc.
+function Library:OnFontChanged(callback)
+    if type(callback) == 'function' then
+        table.insert(Library.FontListeners, callback);
+    end;
+end;
+
+function Library:BuildFontSection(container)
+    local names = { 'Default' };
+    for k in pairs(Library.Fonts) do table.insert(names, k) end;
+    table.sort(names, function(a, b)
+        if a == 'Default' then return true end;
+        if b == 'Default' then return false end;
+        return a < b;
+    end);
+
+    container:AddDropdown('LibraryFont', {
+        Text = 'Font';
+        Values = names;
+        Default = 1;
+        Callback = function(val)
+            Library:SetFont(val);
+        end;
+    });
+end;
+
 function Library:CreateLabel(Properties, IsHud)
     local _Instance = Library:Create('TextLabel', {
         BackgroundTransparency = 1;
-        Font = Library.Font;
+        FontFace = Library:GetActiveFont();
         TextColor3 = Library.FontColor;
         TextSize = 16;
         TextStrokeTransparency = 0;
@@ -187,6 +323,21 @@ function Library:CreateLabel(Properties, IsHud)
     }, IsHud);
 
     return Library:Create(_Instance, Properties);
+end;
+
+-- Auto-apply font to newly-created TextBoxes (TextLabels go through CreateLabel).
+-- Also catches any external TextLabel/TextButton that gets added to the ScreenGui.
+do
+    local applied = setmetatable({}, { __mode = 'k' });
+    table.insert(Library.Signals, ScreenGui.DescendantAdded:Connect(function(desc)
+        if applied[desc] then return end;
+        if desc:IsA('TextLabel') or desc:IsA('TextBox') or desc:IsA('TextButton') then
+            applied[desc] = true;
+            task.defer(function()
+                pcall(function() desc.FontFace = Library:GetActiveFont() end);
+            end);
+        end;
+    end));
 end;
 
 function Library:MakeDraggable(Instance, Cutoff)
