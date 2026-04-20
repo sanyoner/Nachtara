@@ -311,11 +311,19 @@ local function collectLabelsToDraw(fakeData)
 end
 
 -- Measure pixel bounds the text will take. Returns (width, height) in pixels.
-local function measureText(text, size, font)
+--
+-- CRITICAL: GetTextSize expects an `Enum.Font` EnumItem for the font arg, NOT
+-- a `Font` object (as returned by Font.fromEnum or Font.new). Passing a Font
+-- object raises "Unable to cast Font to Font" every frame — the error spam
+-- triggered BAC Alpha-3B (error-pattern anti-cheat) and kicked the user.
+-- Always use the EnumItem directly. pcall wrapper prevents future type drift
+-- from ever reaching BAC.
+local function measureText(text, size)
     if not text or text == '' then return 0, 0 end
-    local b = game:GetService('TextService'):GetTextSize(
-        text, size, font, Vector2.new(math.huge, math.huge)
-    )
+    local ok, b = pcall(game:GetService('TextService').GetTextSize,
+        game:GetService('TextService'),
+        text, size, Enum.Font.Code, Vector2.new(math.huge, math.huge))
+    if not ok or not b then return 0, 0 end
     return b.X, b.Y
 end
 
@@ -324,13 +332,12 @@ end
 -- box + whatever labels are currently enabled.
 local function updatePreview(win, refs, fakeData, dt)
     local labels = collectLabelsToDraw(fakeData)
-    local font = Font.fromEnum(Enum.Font.Code)
 
     -- Measure how much room each edge needs.
-    local topW,  topH  = measureText(labels.Top.text,   labels.Top.size,  font)
-    local downW, downH = measureText(labels.Down.text,  labels.Down.size, font)
-    local leftW, leftH = measureText(labels.Left.text,  labels.Left.size, font)
-    local rightW,rightH= measureText(labels.Right.text, labels.Right.size,font)
+    local topW,  topH  = measureText(labels.Top.text,   labels.Top.size)
+    local downW, downH = measureText(labels.Down.text,  labels.Down.size)
+    local leftW, leftH = measureText(labels.Left.text,  labels.Left.size)
+    local rightW,rightH= measureText(labels.Right.text, labels.Right.size)
 
     local marginT = (labels.Top.text  ~= '' and (topH + LABEL_PAD))  or EDGE_PAD
     local marginB = (labels.Down.text ~= '' and (downH + LABEL_PAD)) or EDGE_PAD
