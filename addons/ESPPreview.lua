@@ -190,12 +190,21 @@ local function buildESPBox(root, fontFace)
         l.FontFace = fontFace
         l.TextSize = 12
         l.TextColor3 = Color3.new(1, 1, 1)
-        l.TextStrokeTransparency = 0.3
         l.Text = ''
         l.TextXAlignment = xA
         l.TextYAlignment = yA
         l.ZIndex = 50
         l.Parent = root
+        -- TextStrokeTransparency on bitmap fonts pushes the outline pixels
+        -- outward and produces ugly corner gaps. UIStroke with LineJoinMode
+        -- = Miter respects glyph edges. Mirrors the main script's
+        -- attachLabelStroke pattern.
+        local stroke = Instance.new('UIStroke')
+        stroke.Name = 'Outline'
+        stroke.Color = Color3.new(0, 0, 0)
+        stroke.Thickness = 1
+        stroke.LineJoinMode = Enum.LineJoinMode.Miter
+        stroke.Parent = l
         return l
     end
     local labelTop   = mkLabel('LabelTop',   Enum.TextXAlignment.Center, Enum.TextYAlignment.Bottom)

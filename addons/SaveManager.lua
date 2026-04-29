@@ -103,7 +103,7 @@ SaveManager.Parser = {
         end,
     },
     Dropdown = {
-        Save = function(idx, object) return { type = 'Dropdown', idx = idx, value = object.Value, mutli = object.Multi } end,
+        Save = function(idx, object) return { type = 'Dropdown', idx = idx, value = object.Value, multi = object.Multi } end,
         Load = function(idx, data)
             if Options[idx] then Options[idx]:SetValue(data.value) end
         end,

@@ -441,9 +441,10 @@ function Library:CreateLabel(Properties, IsHud)
         FontFace = Library:GetActiveFont();
         TextColor3 = Library.FontColor;
         TextSize = 16;
-        TextStrokeTransparency = 0;
     });
 
+    -- ApplyTextStroke sets TextStrokeTransparency=1 (disables the engine's
+    -- ugly bitmap-font outline) and adds a UIStroke with LineJoinMode=Miter.
     Library:ApplyTextStroke(_Instance);
 
     Library:AddToRegistry(_Instance, {
@@ -514,7 +515,7 @@ function Library:MakeDraggable(Frame, Cutoff)
 
         local x, y = newX, newY;
 
-        for _, other in ipairs(Library.Draggables) do
+        for _, other in Library.Draggables do
             if other ~= entry and other.frame and other.frame.Parent and other.frame.Visible then
                 local oPos = other.frame.AbsolutePosition;
                 local oSize = other.frame.AbsoluteSize;
@@ -642,7 +643,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
     local showToken = 0;
     local fadeInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
 
-    HoverInstance.MouseEnter:Connect(function()
+    Library:GiveSignal(HoverInstance.MouseEnter:Connect(function()
         if Library:MouseIsOverOpenedFrame() then
             return
         end
@@ -668,9 +669,9 @@ function Library:AddToolTip(InfoStr, HoverInstance)
                 Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
             end
         end)
-    end)
+    end))
 
-    HoverInstance.MouseLeave:Connect(function()
+    Library:GiveSignal(HoverInstance.MouseLeave:Connect(function()
         IsHovering = false
         showToken = showToken + 1
         local myToken = showToken
@@ -683,7 +684,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
                 Tooltip.Visible = false
             end
         end)
-    end)
+    end))
 end
 
 -- Atlanta-style smooth hover. Instead of instant color swap, color properties
@@ -1102,7 +1103,6 @@ do
             Text = '#FFFFFF',
             TextColor3 = Library.FontColor;
             TextSize = 14;
-            TextStrokeTransparency = 0;
             TextXAlignment = Enum.TextXAlignment.Left;
             ZIndex = 20,
             Parent = HueBoxInner;
@@ -2031,7 +2031,10 @@ do
                     end
                 end)
                 task.delay(timeout, function()
-                    connection:disconnect()
+                    -- :Disconnect (capital D) — RBXScriptConnection has no
+                    -- :disconnect alias, so the lowercase form silently
+                    -- failed and leaked the InputService listener.
+                    connection:Disconnect()
                     bindable:Fire(false)
                 end)
                 return bindable.Event:Wait()
@@ -2244,7 +2247,6 @@ do
             Text = Info.Default or '';
             TextColor3 = Library.FontColor;
             TextSize = 14;
-            TextStrokeTransparency = 0;
             TextXAlignment = Enum.TextXAlignment.Left;
 
             ZIndex = 7;
